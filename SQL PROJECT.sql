@@ -1,0 +1,500 @@
+USE ECOMM;
+
+--E-Commerce Customer Churn Analysis--
+
+--DATA CLEANING--
+--HANDLING MISSING VALUES AND OUTLIERS--
+
+--1.Impute mean for the following columns, and round off to the nearest integer if
+required: WarehouseToHome, HourSpendOnApp, OrderAmountHikeFromlastYear,
+DaySinceLastOrder--
+
+SELECT AVG(WAREHOUSETOHOME) AVG_WAREHOUSETOHOME FROM CUSTOMER_CHURN;
+SELECT AVG(HOURSPENDONAPP) AVG_HOURSPENDONAPP FROM CUSTOMER_CHURN;
+SELECT AVG(ORDERAMOUNTHIKEFROMLASTYEAR) AVG_ORDERAMOUNTHIKEFROMLASTYEAR FROM CUSTOMER_CHURN;
+SELECT AVG(DAYSINCELASTORDER) AVG_DAYSINCELASTORDER FROM CUSTOMER_CHURN;
+
+--2.Impute mode for the following columns: Tenure, CouponUsed, OrderCount--
+
+SET SQL_SAFE_UPDATES = 0;
+UPDATE CUSTOMER_CHURN
+JOIN(SELECT TENURE AS MODE_TENURE FROM CUSTOMER_CHURN
+     WHERE TENURE IS NOT NULL
+     GROUP BY TENURE
+     ORDER BY COUNT(*) DESC
+     LIMIT 1
+   )T1
+JOIN(SELECT COUPONUSED AS MODE_COUPONUSED FROM CUSTOMER_CHURN
+     WHERE COUPONUSED IS NOT NULL
+     GROUP BY COUPONUSED
+     ORDER BY COUNT(*) DESC
+     LIMIT 1
+     )T2
+JOIN(SELECT ORDERCOUNT AS MODE_ORDERCOUNT FROM CUSTOMER_CHURN
+     WHERE ORDERCOUNT IS NOT NULL
+     GROUP BY ORDERCOUNT
+     ORDER BY COUNT(*) DESC
+     LIMIT 1  
+     )T3
+     SET CUSTOMER_CHURN.TENURE = COALESCE(CUSTOMER_CHURN.TENURE,T1.MODE_TENURE),
+		 CUSTOMER_CHURN.COUPONUSED = COALESCE(CUSTOMER_CHURN.COUPONUSED,T2.MODE_COUPONUSED),
+         CUSTOMER_CHURN.ORDERCOUNT = COALESCE(CUSTOMER_CHURN.ORDERCOUNT,T3.MODE_ORDERCOUNT);
+ 
+ --3.Handle outliers in the 'WarehouseToHome' column by deleting rows where the
+values are greater than 100--
+
+DELETE FROM CUSTOMER_CHURN
+WHERE WAREHOUSETOHOME > 100;
+
+--Dealing with Inconsistencies--
+
+--1.Replace occurrences of “Phone” in the 'PreferredLoginDevice' column and
+“Mobile” in the 'PreferedOrderCat' column with “Mobile Phone” to ensure
+uniformity--
+
+UPDATE CUSTOMER_CHURN
+SET PREFERREDLOGINDEVICE = 'MOBILE PHONE'
+WHERE PREFERREDLOGINDEVICE = 'PHONE';
+
+UPDATE CUSTOMER_CHURN
+SET PREFEREDORDERCAT = 'MOBILE PHONE'
+WHERE PREFEREDORDERCAT = 'MOBILE';
+
+--2.Standardize payment mode values: Replace "COD" with "Cash on Delivery" and
+"CC" with "Credit Card" in the PreferredPaymentMode column--
+
+UPDATE CUSTOMER_CHURN
+JOIN(SELECT PREFERREDPAYMENTMODE AS MODE_PREFERREDPAYMENTMODE
+FROM CUSTOMER_CHURN
+WHERE PREFERREDPAYMENTMODE IS NOT NULL
+GROUP BY PREFERREDPAYMENTMODE
+ORDER BY COUNT(*)DESC
+LIMIT 1
+)T
+SET CUSTOMER_CHURN.PREFERREDPAYMENTMODE = 'CASH ON DELIVERY'
+WHERE CUSTOMER_CHURN.PREFERREDPAYMENTMODE = 'COD';
+
+UPDATE CUSTOMER_CHURN
+JOIN(SELECT PREFERREDPAYMENTMODE AS MODE_PREFERREDPAYMENTMODE
+FROM CUSTOMER_CHURN
+WHERE PREFERREDPAYMENTMODE IS NOT NULL
+GROUP BY PREFERREDPAYMENTMODE
+ORDER BY COUNT(*)DESC
+LIMIT 1
+)T
+SET CUSTOMER_CHURN.PREFERREDPAYMENTMODE = 'CREDIT CARD'
+WHERE CUSTOMER_CHURN.PREFERREDPAYMENTMODE = 'CC';
+
+--DATA TRANSFORMATION--
+
+--1.Column Renaming--
+
+--Rename the column "PreferedOrderCat" to "PreferredOrderCat"--
+--Rename the column "HourSpendOnApp" to "HoursSpentOnApp"--
+
+ALTER TABLE CUSTOMER_CHURN
+RENAME COLUMN PREFEREDORDERCAT TO PREFERREDORDERCAT;
+
+ALTER TABLE CUSTOMER_CHURN
+RENAME COLUMN HOURSPENDONAPP TO HOURSSPENDONAPP;
+
+--2.Creating New Columns--
+
+--Create a new column named ‘ComplaintReceived’ with values "Yes" if the
+corresponding value in the ‘Complain’ is 1, and "No" otherwise--
+
+ALTER TABLE CUSTOMER_CHURN
+ADD COLUMN COMPLAINTRECEIVED VARCHAR(5);
+
+SET SQL_SAFE_UPDATES = 0;
+UPDATE CUSTOMER_CHURN
+SET COMPLAINTRECEIVED = CASE
+                           WHEN COMPLAIN = 1 THEN 'YES'
+                           ELSE 'NO'
+                         END;  
+
+--Create a new column named 'ChurnStatus'. Set its value to “Churned” if the
+corresponding value in the 'Churn' column is 1, else assign “Active”--
+
+ALTER TABLE CUSTOMER_CHURN
+ADD COLUMN CHURNSTATUS VARCHAR(10);
+
+UPDATE CUSTOMER_CHURN
+SET CHURNSTATUS = CASE
+					  WHEN CHURN = 1 THEN 'CHURNED'
+					  ELSE 'ACTIVE'
+				  END;
+		
+--Drop the columns "Churn" and "Complain" from the table--
+
+ALTER TABLE CUSTOMER_CHURN
+DROP COLUMN CHURN;
+
+ALTER TABLE CUSTOMER_CHURN
+DROP COLUMN COMPLAIN; 
+
+--DATA EXPLORATION AND ANALYSIS--
+
+--1.Retrieve the count of churned and active customers from the dataset--  
+
+SELECT CHURNSTATUS,COUNT(*) FROM CUSTOMER_CHURN
+GROUP BY CHURNSTATUS;
+
+--2.Display the average tenure and total cashback amount of customers who
+churned--
+
+SELECT CHURNSTATUS,AVG(TENURE),SUM(CASHBACKAMOUNT) 
+FROM CUSTOMER_CHURN
+WHERE CHURNSTATUS = 'CHURNED';
+
+--3.Identify the gender that utilized the highest number of coupons--
+
+SELECT GENDER,SUM(COUPONUSED) TOTAL_COUPONUSED FROM CUSTOMER_CHURN
+GROUP BY GENDER
+ORDER BY TOTAL_COUPONUSED DESC
+LIMIT 1;
+
+--4.Categorize customers based on their distance from the warehouse to home such
+as 'Very Close Distance' for distances <=5km, 'Close Distance' for <=10km,
+'Moderate Distance' for <=15km, and 'Far Distance' for >15km. Then, display the
+churn status breakdown for each distance category--
+
+SELECT 
+    CASE
+        WHEN WAREHOUSETOHOME <= 5 THEN 'Very Close Distance'
+        WHEN WAREHOUSETOHOME <= 10 THEN 'Close Distance'
+        WHEN WAREHOUSETOHOME <= 15 THEN 'Moderate Distance'
+        ELSE 'Far Distance'
+    END AS DISTANCE_CATEGORY,CHURNSTATUS,COUNT(*) AS CUSTOMER_COUNT
+FROM CUSTOMER_CHURN
+GROUP BY DISTANCE_CATEGORY, CHURNSTATUS
+ORDER BY DISTANCE_CATEGORY, CHURNSTATUS;			
+
+--5.Identify the most preferred payment mode among active customers--
+
+SELECT PREFERREDPAYMENTMODE,COUNT(*) AS TOTAL_ACTIVE_CUSTOMERS FROM CUSTOMER_CHURN
+WHERE CHURNSTATUS = 'ACTIVE'
+  AND PREFERREDPAYMENTMODE IS NOT NULL
+GROUP BY PREFERREDPAYMENTMODE
+ORDER BY TOTAL_ACTIVE_CUSTOMERS DESC
+LIMIT 1;
+
+--6.Identify the city tier with the highest number of churned customers whose
+preferred order category is Laptop & Accessory--
+
+SELECT CITYTIER,COUNT(*) AS TOTAL_CHURNED_CUSTOMERS FROM CUSTOMER_CHURN
+WHERE CHURNSTATUS = 'CHURNED' AND PREFERREDORDERCAT = 'LAPTOP & ACCESSORY'
+GROUP BY CITYTIER
+ORDER BY TOTAL_CHURNED_CUSTOMERS DESC 
+LIMIT 1;
+
+--7.Determine the percentage of churned customers who complained--
+
+SELECT 
+    (COUNT(CASE WHEN CHURNSTATUS = 'CHURNED'THEN 1 END) * 100.0 / COUNT(*)) 
+    AS PERCENTAGE_CHURNED
+FROM CUSTOMER_CHURN
+WHERE CHURNSTATUS = 'CHURNED';
+
+--8.Calculate the total order amount hike from last year for customers who are single
+and prefer mobile phones for ordering--
+
+SELECT 
+    PREFERREDLOGINDEVICE,SUM(ORDERAMOUNTHIKEFROMLASTYEAR) AS TOTAL_HIKE,
+    COUNT(*) AS TOTAL_SINGLE_CUSTOMERS
+FROM CUSTOMER_CHURN
+WHERE MARITALSTATUS = 'SINGLE'
+  AND PREFERREDLOGINDEVICE = 'Mobile Phone';
+  
+--9.Find the average number of devices registered among customers who used UPI as
+their preferred payment mode--
+
+SELECT PREFERREDPAYMENTMODE,AVG(NUMBEROFDEVICEREGISTERED),COUNT(*) AS CUSTOMER_COUNT FROM CUSTOMER_CHURN
+WHERE PREFERREDPAYMENTMODE = 'UPI';
+
+--10.Determine the city tier with the highest number of customers--
+
+SELECT CITYTIER,COUNT(*) TOTAL_NO_CUSTOMERS FROM CUSTOMER_CHURN
+GROUP BY CITYTIER
+ORDER BY TOTAL_NO_CUSTOMERS DESC
+LIMIT 3;
+
+--11.List the number of customers and the maximum hours spent on the app in each
+preferred order category--
+
+SELECT PREFERREDORDERCAT,COUNT(CUSTOMERID) AS TOTAL_CUSTOMERS,MAX(HOURSSPENDONAPP) AS MAX_HOURS
+FROM CUSTOMER_CHURN
+GROUP BY PREFERREDORDERCAT
+ORDER BY MAX_HOURS DESC;
+
+--12.Calculate the total order count for customers who prefer using credit cards and
+have the maximum satisfaction score--
+
+SELECT SUM(ORDERCOUNT) AS TOTAL_ORDER_COUNT,PREFERREDPAYMENTMODE,MAX(SATISFACTIONSCORE) FROM CUSTOMER_CHURN
+WHERE PREFERREDPAYMENTMODE = 'CREDIT CARD'
+  AND SATISFACTIONSCORE = (SELECT MAX(SATISFACTIONSCORE)     
+              FROM CUSTOMER_CHURN
+			  WHERE PREFERREDPAYMENTMODE = 'CREDIT CARD');
+
+--13.What is the average satisfaction score of customers who have complained?--		
+
+SELECT COMPLAINTRECEIVED,AVG(SATISFACTIONSCORE)  FROM CUSTOMER_CHURN
+WHERE COMPLAINTRECEIVED = 'YES';
+
+--14.List the preferred order category among customers who used more than 5
+coupons--
+
+SELECT PREFERREDORDERCAT,COUPONUSED FROM CUSTOMER_CHURN
+WHERE COUPONUSED > 5;
+
+--15.List the top 3 preferred order categories with the highest average cashback
+amount--
+
+SELECT PREFERREDORDERCAT,MAX(CASHBACKAMOUNT) 
+FROM CUSTOMER_CHURN
+GROUP BY PREFERREDORDERCAT
+ORDER BY MAX(CASHBACKAMOUNT)
+LIMIT 3;
+		
+--16.Find the preferred payment modes of customers whose average tenure is 10
+months and have placed more than 500 orders--
+
+SELECT PREFERREDPAYMENTMODE,AVG(TENURE) AS AVG_TENURE,SUM(ORDERCOUNT) AS TOTAL_ORDERS
+FROM CUSTOMER_CHURN
+GROUP BY PREFERREDPAYMENTMODE
+HAVING ROUND(AVG(TENURE)) = 10
+   AND SUM(ORDERCOUNT) > 500;
+   
+--17.List the customer’s order details who are married, live in City Tier-1, and their
+order counts are more than the average number of orders placed by all
+customers--
+
+SELECT CUSTOMERID,MARITALSTATUS,CITYTIER,ORDERCOUNT FROM CUSTOMER_CHURN
+WHERE MARITALSTATUS = 'MARRIED',CITYTIER = 1
+          AND ORDERCOUNT = SELECT(ORDERCOUNT > AVG
+          SELECT * FROM CUSTOMER_CHURN;
+          
+--CUSTOMER_RETURNS TABLE HAS BEEN CREATED--          
+
+CREATE TABLE CUSTOMER_RETURNS (
+          RETURNID INT PRIMARY KEY,
+          CUSTOMERID INT NOT NULL,
+          RETURNDATE DATE NOT NULL,
+          REFUNDAMOUNT DECIMAL(10,2) NOT NULL
+);
+
+INSERT INTO CUSTOMER_RETURNS (RETURNID, CUSTOMERID, RETURNDATE, REFUNDAMOUNT) VALUES
+(1001, 50022, '2023-01-01', 2130),
+(1002, 50316, '2023-01-23', 2000),
+(1003, 51099, '2023-02-14', 2290),
+(1004, 52321, '2023-03-08', 2510),
+(1005, 52928, '2023-03-20', 3000),
+(1006, 53749, '2023-04-17', 1740),
+(1007, 54206, '2023-04-21', 3250),
+(1008, 54838, '2023-04-30', 1990);
+
+--Display the return details along with the customer details of those who have
+churned and have made complaints--
+
+SELECT CR.RETURNID,CR.CUSTOMERID,CR.RETURNDATE,CR.REFUNDAMOUNT,CC.CHURNSTATUS,CC.COMPLAINTRECEIVED,CC.GENDER
+FROM CUSTOMER_RETURNS CR
+JOIN CUSTOMER_CHURN CC ON CR.CUSTOMERID = CC.CUSTOMERID
+WHERE CC.CHURNSTATUS = 'CHURNED'
+      AND CC.COMPLAINTRECEIVED = 'YES';
+
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
+                    
+                    
+
+
+
+
+
+
+
+
+
+
+
+
+      
+
+
+
+
+
+
+
+
+
+         
+         
+
+
+
+
+
+
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
